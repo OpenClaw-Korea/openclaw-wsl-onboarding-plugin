@@ -1,0 +1,15 @@
+{
+  "name": "openclaw-onboarding",
+  "version": "0.1.0",
+  "description": "End-to-end OpenClaw onboarding inside WSL2: from npm install to a running Gateway with the Control UI dashboard open. Bundles a skill (conversational wrapper), a subagent (does the actual work in isolated context), and SubagentStart/Stop hooks (logs each run).",
+  "author": {
+    "name": "dkmin"
+  },
+  "keywords": [
+    "openclaw",
+    "onboarding",
+    "wsl",
+    "gateway",
+    "dashboard"
+  ]
+}

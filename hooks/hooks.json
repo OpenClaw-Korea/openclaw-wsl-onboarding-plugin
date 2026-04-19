@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "SubagentStart": [
+      {
+        "matcher": "openclaw-onboarder",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p ~/.claude/logs && jq -r '[\"[\" + (now | todate) + \"]\", \"start\", \"session=\" + (.session_id // \"?\"), \"cwd=\" + (.cwd // \"?\")] | join(\" \")' >> ~/.claude/logs/openclaw-onboarding.log"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "openclaw-onboarder",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p ~/.claude/logs && jq -r '[\"[\" + (now | todate) + \"]\", \"end\", \"session=\" + (.session_id // \"?\")] | join(\" \")' >> ~/.claude/logs/openclaw-onboarding.log"
+          }
+        ]
+      }
+    ]
+  }
+}
