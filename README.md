@@ -30,22 +30,25 @@ OpenClaw 처음 깔아보면 다음 지점에서 자주 막힙니다.
 
 **스킬이 하는 일** (호출되면 순서대로)
 
-1. 사용자에게 LLM provider / API 키 / (선택) 모델 ID를 물어본다
-2. WSL2 안에서 Node 버전을 확인한다
-3. `npm install -g openclaw` 로 설치한다
-4. `~/.profile` 에 `~/.npm-global/bin` PATH 블록이 없으면 추가한다 (비대화형 쉘에서 `openclaw` 해상 보장)
-5. `openclaw onboard --non-interactive --accept-risk --<provider>-api-key '<KEY>' --skip-daemon --skip-channels --skip-health --secret-input-mode plaintext` 로 온보딩
-6. 사용자가 모델을 지정했으면 `~/.openclaw/openclaw.json` 을 파이썬으로 in-place 편집해 `agents.defaults.model.primary` 를 바꾼다
-7. 좀비 Gateway 가 있으면 `pkill -9 -f openclaw-gateway` 로 정리
-8. `nohup openclaw gateway run` 로 백그라운드 기동 후 `127.0.0.1:18789` LISTEN 상태를 최대 10초까지 폴링
-9. 설정 파일에서 Gateway 인증 토큰을 추출해 대시보드 URL + 토큰 + 경고 사항을 사용자에게 전달
-10. `~/.claude/logs/openclaw-onboarding.log` 에 이번 실행 요약 JSONL 한 줄을 append (성공/실패 모두)
+1. `AskUserQuestion` 폼으로 LLM provider와 (선택) 모델 ID를 수집한다
+2. 사용자에게 **`C:\Users\<username>\Downloads\api.txt`** 파일에 API 키를 평문 한 줄로 저장해달라고 안내한다. 키는 대화창에 절대 받지 않는다
+3. WSL2 안에서 Node 버전을 확인한다
+4. `npm install -g openclaw` 로 설치한다
+5. `~/.profile` 에 `~/.npm-global/bin` PATH 블록이 없으면 추가한다 (비대화형 쉘에서 `openclaw` 해상 보장)
+6. `openclaw onboard --non-interactive --accept-risk --<provider>-api-key "$(cat /mnt/c/Users/<win_user>/Downloads/api.txt)" --skip-daemon --skip-channels --skip-health --secret-input-mode plaintext` 로 온보딩. `$(cat …)` 치환은 WSL 쉘 안에서만 평가되므로 키 바이트는 Claude 컨텍스트에 들어오지 않는다
+7. 온보딩이 인증 프로필 파일을 정상 생성하면 `Downloads/api.txt` 를 삭제해 같은 키가 디스크에 두 벌 남지 않게 한다
+8. 사용자가 모델을 지정했으면 `~/.openclaw/openclaw.json` 을 파이썬으로 편집해 `agents.defaults.model.primary` 를 새 모델 ID로 바꾸고, `agents.defaults.models` 에도 해당 항목을 추가한다
+9. 좀비 Gateway 가 있으면 `pkill -9 -f openclaw-gateway` 로 정리
+10. `nohup openclaw gateway run` 로 백그라운드 기동 후 `127.0.0.1:18789` LISTEN 상태를 최대 10초까지 폴링
+11. 설정 파일에서 Gateway 인증 토큰을 추출해 대시보드 URL + 토큰 + 경고 사항을 사용자에게 전달
+12. `~/.claude/logs/openclaw-onboarding.log` 에 이번 실행 요약 JSONL 한 줄을 append (성공/실패 모두)
 
 **설계상 한계 (의도된 제약)**
 
 - **WSL2 전용**: 네이티브 Windows 경로는 의도적으로 다루지 않습니다. 그쪽은 함정이 많아 유지보수 비용이 훨씬 큽니다.
 - **로컬 루프백 싱글 유저**: Gateway는 `127.0.0.1:18789` 에 바인드합니다. LAN 노출은 범위 밖입니다.
-- **API 키 평문 저장**: 키는 `~/.openclaw/agents/main/agent/auth-profiles.json` 에 파일 권한 600으로 평문 저장됩니다. `ref` 모드의 런타임 env 의존 문제를 피하기 위한 의도적 선택이며, 공유 머신에는 권장하지 않습니다.
+- **API 키 평문 저장**: 온보딩 후 키는 `~/.openclaw/agents/main/agent/auth-profiles.json` 에 파일 권한 600으로 평문 저장됩니다. `ref` 모드의 런타임 env 의존 문제를 피하기 위한 의도적 선택이며, 공유 머신에는 권장하지 않습니다.
+- **키 전달 경로**: 사용자는 키를 대화창에 붙여넣지 않고 `Downloads/api.txt` 파일에 저장하며, 스킬은 WSL 안의 shell substitution으로만 읽습니다. 이 경로 덕에 키 원문은 Claude Code 대화 전사, 툴 호출 인자, 툴 결과 중 어디에도 남지 않습니다. 온보딩이 성공하면 `api.txt` 는 즉시 삭제됩니다.
 
 ---
 

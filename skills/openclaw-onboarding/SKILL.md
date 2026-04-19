@@ -11,13 +11,46 @@ Windows-native OpenClaw has known friction (mDNS conflicts with WSL instances, S
 
 ## Before you start
 
-Collect from the user:
+Collect what you need **without pulling the API key into the chat transcript**. The key must never appear in chat, in your tool call arguments, or in any tool output. It goes straight from a file on the user's disk into `openclaw onboard` via a shell substitution.
 
-1. **API provider** — Anthropic, OpenAI, Google, OpenRouter, xAI, Moonshot, Together, or any other provider listed under `openclaw onboard --help`. If the user hasn't named one, ask.
-2. **API key** — for that provider.
-3. **(Optional) preferred model ID** — e.g. `openai/gpt-5.4-mini`. If omitted, the onboarder default applies. Do not invent model IDs; a typo only surfaces as a provider 404 at first chat, which is a frustrating failure mode.
+### Ask the structured questions with AskUserQuestion
 
-If the user pastes the key directly into chat, warn them once that it is now in the transcript and recommend rotating it at the provider's key management page after onboarding. Do not refuse — just warn and continue.
+Prefer the `AskUserQuestion` tool (Claude Code form input) so the user gets a clickable menu instead of free typing:
+
+1. **Provider** — ask with options like:
+   - `Anthropic` (Claude)
+   - `OpenAI` (Recommended)
+   - `Google` (Gemini)
+   - Other (the user can type their provider name; match it to the corresponding `--<provider>-api-key` flag by running `openclaw onboard --help` if uncertain)
+2. **Model choice** — ask:
+   - `Keep provider default` (Recommended)
+   - `Use a cheaper/smaller model` (then ask the user to type the exact model ID, e.g. `openai/gpt-5.4-mini`. Do not invent IDs — a typo only surfaces as a provider 404 at first chat.)
+
+### Get the API key via a file, not the chat
+
+Target path: the user's Windows **Downloads** folder. Downloads is the safest drop zone because it is:
+- Not localized (unlike Desktop → 바탕화면/Escritorio/Bureau/…) so the path is stable across locales.
+- Not typically synced by OneDrive by default, so the file won't be replicated to the cloud.
+- Easy to reach from both File Explorer and any browser "Save as" dialog.
+
+Do **not** ask the user to save to WSL home (`\\wsl.localhost\...`) or to Desktop — both create friction for non-technical users.
+
+Tell the user, in plain language:
+
+1. Open your Downloads folder in File Explorer (or press `Win+E` → Downloads).
+2. Create a new plain text file named exactly `api.txt`.
+3. Paste your API key as the **only** contents. One line, no quotes, no prefix.
+4. Save and close. Tell me when it's done.
+
+From WSL, detect the current Windows user and verify the file exists:
+
+```bash
+wsl -e bash -c 'WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d "\r\n"); FILE="/mnt/c/Users/$WIN_USER/Downloads/api.txt"; test -s "$FILE" && echo "ok: $FILE" || echo "missing: $FILE"'
+```
+
+If missing, ask the user to double-check the filename (must be `api.txt`, not `api.txt.txt` — Windows hides known extensions by default), or whether they saved somewhere else. Do **not** ever `cat` the file; printing its contents would pull the key into your tool output and into the conversation transcript.
+
+Remember that Windows path as `$API_FILE` for the next steps. You will pass it via shell substitution only — the key's bytes never leave the shell into your context.
 
 Also capture the start time in seconds (`date +%s`) so you can compute `duration_s` for the final log line.
 
@@ -92,8 +125,10 @@ Flag choices and why they matter:
 
 The provider flag is `--<provider>-api-key <key>`. For example `--openai-api-key`, `--anthropic-api-key`, `--google-api-key`, `--openrouter-api-key`, `--xai-api-key`. Run `openclaw onboard --help` when in doubt.
 
+The key comes from `api.txt` via shell substitution — `$(cat "$API_FILE")` is evaluated inside the WSL shell, so the key's bytes stay on the user's machine and never enter your tool output or the conversation transcript.
+
 ```bash
-wsl -e bash -lc "openclaw onboard --non-interactive --accept-risk --<provider>-api-key '<KEY>' --skip-daemon --skip-channels --skip-health --secret-input-mode plaintext"
+wsl -e bash -lc 'WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d "\r\n"); API_FILE="/mnt/c/Users/$WIN_USER/Downloads/api.txt"; openclaw onboard --non-interactive --accept-risk --<provider>-api-key "$(cat "$API_FILE")" --skip-daemon --skip-channels --skip-health --secret-input-mode plaintext'
 ```
 
 Verify the auth profile has the key:
@@ -101,6 +136,14 @@ Verify the auth profile has the key:
 ```bash
 wsl -e bash -c "test -s ~/.openclaw/agents/main/agent/auth-profiles.json && echo ok"
 ```
+
+Once the auth profile is confirmed, delete `api.txt` so the key does not linger on disk in two places:
+
+```bash
+wsl -e bash -lc 'WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d "\r\n"); rm -f "/mnt/c/Users/$WIN_USER/Downloads/api.txt" && echo "api.txt removed"'
+```
+
+Add `"api.txt removed from Downloads"` to warnings so the user sees it in the final report.
 
 ### 5. (Optional) switch the default model
 
@@ -186,8 +229,8 @@ Present in chat:
 - **Gateway auth token** — they paste it into the dashboard's auth prompt.
 - **Alternative**: `openclaw tui` inside WSL for an in-terminal chat UI.
 - **Security reminders**:
-  - API key is stored plaintext in `~/.openclaw/agents/main/agent/auth-profiles.json` (perms 600 but plaintext).
-  - If the key was pasted into this chat, rotate it now at the provider's key management page.
+  - API key is now stored plaintext in `~/.openclaw/agents/main/agent/auth-profiles.json` (perms 600 but unencrypted). The `api.txt` file the user created in Downloads has been deleted.
+  - The key never entered this chat transcript — it went from Downloads/api.txt straight into `openclaw onboard` via a shell substitution. So no rotation is needed on that basis.
   - Gateway binds to loopback by default. Do not change `gateway.bind` to `lan` or `auto` without understanding the implications.
 - **Warnings** captured during the run, in plain language.
 
