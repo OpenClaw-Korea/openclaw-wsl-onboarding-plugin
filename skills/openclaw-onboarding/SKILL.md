@@ -3,47 +3,201 @@ name: openclaw-onboarding
 description: Install and onboard OpenClaw inside WSL2 from zero to a running Gateway with an open Control UI dashboard. Use this skill whenever the user wants to install OpenClaw, set up OpenClaw, onboard OpenClaw, reinstall OpenClaw, get the OpenClaw dashboard running, configure an OpenClaw agent with an API key, or mentions phrases like "openclaw setup", "openclaw first time", "openclaw from scratch", "openclaw gateway not starting", or "openclaw dashboard port 18789". Trigger even when the user doesn't explicitly name every step — e.g., "I want to try openclaw" or "help me get openclaw running in wsl" should invoke this.
 ---
 
-# OpenClaw Onboarding (conversational wrapper)
+# OpenClaw Onboarding (WSL2)
 
-Your job in this skill is the **conversational layer** around an onboarding flow that is actually executed by the `openclaw-onboarder` subagent. You gather the inputs the subagent needs, hand them off, and relay the result. Do not run the install / config / gateway commands yourself — the subagent is the one with the execution context and the SubagentStart/Stop hooks that log each run.
+Take the user from nothing to a running OpenClaw Gateway with the Control UI dashboard reachable at `http://127.0.0.1:18789/`, all inside WSL2. At the end, append one JSONL line summarizing the run to `~/.claude/logs/openclaw-onboarding.log` so runs can be audited later.
 
-## Step 1 — Collect inputs from the user
+Windows-native OpenClaw has known friction (mDNS conflicts with WSL instances, Scheduled Task permissions, slow Bonjour probing). This skill deliberately targets WSL only.
 
-Before invoking the subagent, make sure you have:
+## Before you start
 
-1. **API provider** — one of Anthropic, OpenAI, Google, OpenRouter, xAI, Moonshot, Together, or any other provider listed under `openclaw onboard --help`. If the user hasn't named one, ask.
+Collect from the user:
+
+1. **API provider** — Anthropic, OpenAI, Google, OpenRouter, xAI, Moonshot, Together, or any other provider listed under `openclaw onboard --help`. If the user hasn't named one, ask.
 2. **API key** — for that provider.
-3. **(Optional) preferred model ID** — e.g. `openai/gpt-5.4-mini`. If omitted, the onboarder uses the provider default. Do not invent a model ID; if the user says "mini" without a full ID and you're unsure of the canonical form, ask rather than guess, because an invalid model only fails at first chat as a provider 404.
+3. **(Optional) preferred model ID** — e.g. `openai/gpt-5.4-mini`. If omitted, the onboarder default applies. Do not invent model IDs; a typo only surfaces as a provider 404 at first chat, which is a frustrating failure mode.
 
-If the user pastes the API key directly into the chat, warn them once that the key is now in the transcript and recommend rotating it at the provider's key management page after onboarding completes. Do not refuse to proceed — just warn and continue.
+If the user pastes the key directly into chat, warn them once that it is now in the transcript and recommend rotating it at the provider's key management page after onboarding. Do not refuse — just warn and continue.
 
-## Step 2 — Delegate to the onboarder subagent
+Also capture the start time in seconds (`date +%s`) so you can compute `duration_s` for the final log line.
 
-Invoke the `openclaw-onboarder` subagent via the Agent tool with `subagent_type: "openclaw-onboarder"`. The prompt you pass must be a self-contained brief — the subagent has no access to this conversation's history and cannot ask follow-up questions mid-run.
+## Execution rules
 
-Include in the brief:
+- All commands go through `wsl -e bash -lc "..."` (or `-c` for one-shot). The host shell does not matter — pwsh, cmd, git-bash all work because `wsl.exe` is a Windows binary.
+- Verify each step actually succeeded; don't assume success from the absence of output. Several OpenClaw subcommands print errors to stderr while exiting 0.
+- Track every non-trivial event (existing install reset, PATH modified, stale gateway killed, mDNS conflicts noticed, etc.) in a running list. These become the `warnings` field in the final log line and part of what you relay to the user.
 
-- The provider and API key (so the subagent can run `openclaw onboard --<provider>-api-key '<KEY>'`).
-- The chosen model ID if the user specified one.
-- A reminder that this is a WSL2-only flow (skip Windows-native logic).
-- An instruction to return, at the end, the dashboard URL, the gateway auth token, and any warnings the subagent encountered (unusual PATH, mDNS conflicts, existing install it had to reset, etc.) so you can relay them faithfully.
+## Flow
 
-The `SubagentStart` and `SubagentStop` hooks in this plugin will record the run to `~/.claude/logs/openclaw-onboarding.log`; you do not need to do any logging yourself.
+### 1. Prerequisites
 
-## Step 3 — Relay the result to the user
+```bash
+wsl -e bash -lc "node --version"
+```
 
-When the subagent returns, present to the user:
+Node 24 is recommended, 22.14+ supported. If Node is missing, stop — do not try to install Node silently; the user's distro may have a preferred version manager. Tell the user to install Node in WSL first and write a `failure` log line with `phase: "prereq"`.
 
-- **Dashboard URL** (normally `http://127.0.0.1:18789/`) — tell them they can open it in their Windows browser; WSL2 default networking forwards loopback.
-- **Gateway auth token** — they'll paste it into the dashboard's auth prompt.
-- **Alternative: TUI** — mention `openclaw tui` inside WSL for an in-terminal chat UI.
-- **Security reminders** — API key is stored plaintext in `~/.openclaw/agents/main/agent/auth-profiles.json` (perms 600 but plaintext); if the key was pasted here, rotate it now.
-- **Any warnings** the subagent surfaced.
+### 2. Install OpenClaw
 
-If the subagent reports a failure, summarize what went wrong and what the user can try — do not silently re-run the same flow. Common failure modes to recognize in its output:
+Global npm install inside WSL. The PowerShell `irm | iex` installer is for native Windows and is not appropriate here.
 
-- "command not found" from a non-interactive shell → PATH problem; `~/.profile` fix may be needed.
-- `Unrecognized key: X` on a config edit → schema mismatch; don't hand-guess config keys.
-- TUI "No API key found for provider" → `--secret-input-mode` was `ref` instead of `plaintext`.
-- `127.0.0.1:18789` never listens after start → usually a stale process; kill with `pkill -9 -f openclaw-gateway` before retrying.
-- Bonjour/mDNS name-conflict spam in gateway logs → another OpenClaw (e.g., a leftover native-Windows instance) is advertising the same name. Fix by setting `gateway.discovery.mdns.mode` to `"off"` in `~/.openclaw/openclaw.json`. The correct key is `gateway.discovery.mdns.mode` (values `off | minimal | full`); `gateway.advertise.mdns` is rejected by the schema. A clean WSL-only install does not need this workaround.
+```bash
+wsl -e bash -lc "npm install -g openclaw"
+```
+
+Confirm the binary exists:
+
+```bash
+wsl -e bash -c "~/.npm-global/bin/openclaw --version"
+```
+
+If the user's npm prefix is elsewhere, adapt with `npm config get prefix` + `/bin`. Some setups have the global bin already on the default PATH and don't need step 3.
+
+### 3. Fix PATH for non-interactive shells
+
+Ubuntu's `~/.bashrc` starts with a guard that returns immediately for non-interactive shells:
+
+```
+case $- in
+    *i*) ;;
+      *) return;;
+esac
+```
+
+A PATH export placed later in `.bashrc` therefore never applies to scripted invocations like `bash -lc "openclaw ..."`. Login-shell PATH belongs in `~/.profile`.
+
+Append only if missing:
+
+```bash
+wsl -e bash -c "grep -q 'npm-global/bin' ~/.profile && echo ok || printf '\n# npm global packages\nif [ -d \"\$HOME/.npm-global/bin\" ] ; then\n    PATH=\"\$HOME/.npm-global/bin:\$PATH\"\nfi\n' >> ~/.profile"
+```
+
+Verify from a login shell:
+
+```bash
+wsl -e bash -lc "openclaw --version"
+```
+
+If this still fails, resolve the prefix and adjust before going further. Later steps rely on `openclaw` resolving in `bash -lc`. Record the result (`appended` vs `skipped`) for the log's `steps.path_fix` field.
+
+### 4. Non-interactive onboarding
+
+Flag choices and why they matter:
+
+- `--non-interactive --accept-risk` — both required; the CLI refuses without `--accept-risk`.
+- `--skip-daemon` — skip Gateway service install. On WSL there is no good analog and a plain foreground-style process is what we want.
+- `--skip-channels` — Telegram/WhatsApp/etc. can be added later.
+- `--skip-health` — without `--install-daemon` the health probe fails because no Gateway is running yet; we start it ourselves in step 6.
+- `--secret-input-mode plaintext` — key is written into `~/.openclaw/agents/main/agent/auth-profiles.json`. `ref` mode stores a reference to an env var and makes the TUI error with `No API key found for provider "<provider>"` whenever the env var isn't exported in that shell. Plaintext avoids that footgun for a local single-user box. File perms are 600 but the key is unencrypted — remind the user at the end.
+
+The provider flag is `--<provider>-api-key <key>`. For example `--openai-api-key`, `--anthropic-api-key`, `--google-api-key`, `--openrouter-api-key`, `--xai-api-key`. Run `openclaw onboard --help` when in doubt.
+
+```bash
+wsl -e bash -lc "openclaw onboard --non-interactive --accept-risk --<provider>-api-key '<KEY>' --skip-daemon --skip-channels --skip-health --secret-input-mode plaintext"
+```
+
+Verify the auth profile has the key:
+
+```bash
+wsl -e bash -c "test -s ~/.openclaw/agents/main/agent/auth-profiles.json && echo ok"
+```
+
+### 5. (Optional) switch the default model
+
+Only if the user specified a model. Onboarding sets a provider-appropriate default (e.g. `openai/gpt-5.4`). To change it, edit `~/.openclaw/openclaw.json` at `agents.defaults.model.primary` and `agents.defaults.models`:
+
+```bash
+wsl -e bash -lc "python3 - <<'PY'
+import json, os
+p = os.path.expanduser('~/.openclaw/openclaw.json')
+c = json.load(open(p))
+c.setdefault('agents',{}).setdefault('defaults',{})
+mid = '<MODEL_ID>'
+c['agents']['defaults']['models'] = {mid: {'alias': 'GPT'}}
+c['agents']['defaults']['model'] = {'primary': mid}
+json.dump(c, open(p, 'w'), indent=2)
+print('model:', mid)
+PY"
+```
+
+Run `openclaw doctor` to confirm the config validates. Doctor exits 0 on valid config even when it prints warnings.
+
+### 6. Start the Gateway detached
+
+If a Gateway is already running from a previous attempt, kill only that process — leave any TUI the user may have in another pane alone:
+
+```bash
+wsl -e bash -lc "pkill -9 -f openclaw-gateway 2>/dev/null; sleep 1"
+```
+
+If anything was killed, add `"stale gateway killed"` to warnings.
+
+Start detached so nothing ties up a WSL terminal:
+
+```bash
+wsl -e bash -lc "nohup openclaw gateway run > ~/.openclaw/gateway.log 2>&1 < /dev/null & disown"
+```
+
+Poll for the listener. Node takes a few seconds to bind and an empty `gateway.log` combined with a bound port is normal — the process renames itself to `openclaw-gateway` and may not write to that log:
+
+```bash
+wsl -e bash -lc "for i in 1 2 3 4 5 6 7 8 9 10; do ss -tlnp 2>/dev/null | grep -q ':18789 ' && echo LISTENING && exit 0; sleep 1; done; echo NOT_LISTENING; tail -40 ~/.openclaw/gateway.log 2>/dev/null; ls -t ~/.openclaw/logs/*.json* 2>/dev/null | head -1 | xargs -r tail -40"
+```
+
+If `NOT_LISTENING`, write a `failure` log line with `phase: "gateway"` and the tailed error. Do not silently retry.
+
+### 7. Read the gateway token
+
+```bash
+wsl -e bash -c "grep -oP '\"token\":\\s*\"\\K[^\"]+' ~/.openclaw/openclaw.json | head -1"
+```
+
+That's the Gateway auth token. The dashboard URL is `http://127.0.0.1:18789/`. On Windows + WSL2 with default networking, the user can open that URL in their Windows browser directly; localhost forwards. On mirrored networking, suggest `wslview http://127.0.0.1:18789/` inside WSL, or use the IP from `wsl hostname -I`.
+
+## Write the log line
+
+Compute `duration_s = now - start_time`. Then append exactly one JSONL line to `~/.claude/logs/openclaw-onboarding.log` summarizing this run. This log is the primary audit surface — write it even on failure.
+
+Success example:
+
+```json
+{"ts":"2026-04-19T14:36:35Z","status":"success","duration_s":380,"model":"openai/gpt-5.4-mini","steps":{"install":"ok","path_fix":"appended","onboard":"ok","gateway":"listening"},"warnings":["stale gateway killed"]}
+```
+
+Failure example:
+
+```json
+{"ts":"2026-04-19T15:13:10Z","status":"failure","duration_s":67,"phase":"onboard","error":"--xai-api-key flag not recognized; run openclaw onboard --help","warnings":[]}
+```
+
+Write it like this (adjust `<JSONL>` to the single-line JSON object you built):
+
+```bash
+wsl -e bash -c "mkdir -p ~/.claude/logs && echo '<JSONL>' >> ~/.claude/logs/openclaw-onboarding.log"
+```
+
+Do not include the API key in the log. Keep `warnings` a plain array of short strings — messages like `"stale gateway killed"`, `"PATH appended to ~/.profile"`, `"mDNS name conflict detected"`, `"existing openclaw.json backed up to .bak"`.
+
+## Tell the user what they got
+
+Present in chat:
+
+- **Dashboard URL**: `http://127.0.0.1:18789/` — openable in their Windows browser.
+- **Gateway auth token** — they paste it into the dashboard's auth prompt.
+- **Alternative**: `openclaw tui` inside WSL for an in-terminal chat UI.
+- **Security reminders**:
+  - API key is stored plaintext in `~/.openclaw/agents/main/agent/auth-profiles.json` (perms 600 but plaintext).
+  - If the key was pasted into this chat, rotate it now at the provider's key management page.
+  - Gateway binds to loopback by default. Do not change `gateway.bind` to `lan` or `auto` without understanding the implications.
+- **Warnings** captured during the run, in plain language.
+
+## Troubleshooting
+
+If the user runs into an issue after onboarding (or you hit one mid-flow), these are the failure modes we've confirmed:
+
+- `openclaw: command not found` in a script but works in the user's terminal → PATH problem, redo step 3.
+- `Unrecognized key: X` on a config edit → schema mismatch. Run `openclaw doctor --fix`, or find the right key by grepping the installed package's `runtime-schema-*.js` for the nearest match. Don't guess.
+- `--<x>-api-key cannot be used with --secret-input-mode ref unless <X>_API_KEY is set in env` → switch to `--secret-input-mode plaintext` (what this skill uses), or export the env var before invoking.
+- Gateway starts but `127.0.0.1:18789` never listens → usually a stale process still bound. `pkill -9 -f openclaw-gateway`, then restart.
+- TUI shows `No API key found for provider "<provider>"` even though onboarding succeeded → config ended up in `ref` mode. Re-run step 4 with `--secret-input-mode plaintext`.
+- Bonjour/mDNS name-conflict spam in gateway logs (`[bonjour] gateway name conflict resolved; newName="... (2)"`) → another OpenClaw (e.g., a leftover native-Windows instance) is advertising the same name. Set `gateway.discovery.mdns.mode` to `"off"` in `~/.openclaw/openclaw.json` (values: `off | minimal | full`). The correct key is `gateway.discovery.mdns.mode`; `gateway.advertise.mdns` is rejected as "Unrecognized key". A clean WSL-only install does not need this workaround.
